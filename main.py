@@ -1,22 +1,38 @@
 import os
 from typing import List
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Security, Request, HTTPException
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text, bindparam
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
+# Config
+API_KEY = "A6MmAE31wO_NRSQf9GlvvvxuTtXs4pDH2X54BsgP5ps"
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
+# Database
 connection_string = "sqlite:///VegVault_agg.sqlite"
-engine = create_engine(
-    connection_string,
-    connect_args={"check_same_thread": False},
-    pool_pre_ping=True
-)
+engine = create_engine(connection_string, connect_args={"check_same_thread": False})
 
-app = FastAPI()
+# App setup
+app = FastAPI(title="VegVault API")
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Auth check
+def verify_api_key(key: str = Security(api_key_header)):
+    if key != API_KEY:
+        raise HTTPException(403, "Invalid API key")
+    return key
 
 @app.get("/")
 def root():
-    return("VegVault API")
+    return "VegVault API"
 
+# Models
 class SpeciesAgg(BaseModel):
     Species: str
     Stem_Specific_Density_AVG: float | None = None
@@ -39,26 +55,28 @@ class SpeciesAgg(BaseModel):
     Inv_SLA_COUNT: int | None = None
 
 class SpeciesBatchRequest(BaseModel):
-    species: List[str] = Field(..., min_length=1)
+    species: List[str] = Field(..., min_length=1, max_length=50)
 
 class SpeciesBatchResponse(BaseModel):
     found: List[SpeciesAgg]
     missing: List[str]
 
 @app.post("/species/batch", response_model=SpeciesBatchResponse)
-def get_species_batch(payload: SpeciesBatchRequest):
-    # normalize input: strip whitespace, drop empties, de-duplicate preserving order
+@limiter.limit("10/minute")
+@limiter.limit("100/hour")
+@limiter.limit("1000/day")
+def get_species_batch(
+    request: Request,
+    payload: SpeciesBatchRequest,
+    api_key: str = Security(verify_api_key)
+):
+    # Normalize input
     seen = set()
-    clean = []
-    for s in payload.species:
-        s2 = s.strip()
-        if s2 and s2 not in seen:
-            seen.add(s2)
-            clean.append(s2)
+    clean = [s.strip() for s in payload.species if (s2 := s.strip()) and not (s2 in seen or seen.add(s2))]
     if not clean:
         return {"found": [], "missing": payload.species}
 
-    # SQL Server IN with expanding parameter
+    # Query with case-insensitive matching
     sql = text("""
         SELECT
             [Species],
@@ -89,6 +107,6 @@ def get_species_batch(payload: SpeciesBatchRequest):
 
     found = [dict(r) for r in rows]
     found_names_lower = {r["Species"].lower() for r in found}
-    missing = [s for s in clean if s.lower() not in found_names_lower] 
+    missing = [s for s in clean if s.lower() not in found_names_lower]
 
     return {"found": found, "missing": missing}
