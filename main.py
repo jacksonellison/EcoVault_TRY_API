@@ -9,7 +9,10 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 # Config
-API_KEY = "A6MmAE31wO_NRSQf9GlvvvxuTtXs4pDH2X54BsgP5ps"
+VALID_API_KEYS = {
+    "A6MmAE31wO_NRSQf9GlvvvxuTtXs4pDH2X54BsgP5ps",
+    "om_f2p4Mfh832OrbSOe1K1BZALiskeQr_6LyteZmuT0"
+}
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # Database
@@ -24,7 +27,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Auth check
 def verify_api_key(key: str = Security(api_key_header)):
-    if key != API_KEY:
+    if key not in VALID_API_KEYS:
         raise HTTPException(403, "Invalid API key")
     return key
 
@@ -110,3 +113,4 @@ def get_species_batch(
     missing = [s for s in clean if s.lower() not in found_names_lower]
 
     return {"found": found, "missing": missing}
+
