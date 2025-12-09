@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text, bindparam
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from pygbif import species as gbif_species
 
 # Config
 VALID_API_KEYS = {
@@ -64,6 +65,35 @@ class SpeciesBatchResponse(BaseModel):
     found: List[SpeciesAgg]
     missing: List[str]
 
+class TaxonomyResult(BaseModel):
+    input_name: str
+    matched: bool
+    canonical_name: str | None = None
+    scientific_name: str | None = None  
+    authorship: str | None = None
+    status: str | None = None
+    match_type: str | None = None
+    confidence: int | None = None
+    is_synonym: bool = False
+    accepted_name: str | None = None  
+    accepted_authorship: str | None = None
+    kingdom: str | None = None
+    phylum: str | None = None
+    class_name: str | None = None  
+    order: str | None = None
+    family: str | None = None
+    genus: str | None = None
+    species: str | None = None
+    rank: str | None = None 
+
+class TaxonomyBatchRequest(BaseModel):
+    species: List[str] = Field(..., min_length=1, max_length=50)
+
+class TaxonomyBatchResponse(BaseModel):
+    results: List[TaxonomyResult]
+
+
+
 @app.post("/species/batch", response_model=SpeciesBatchResponse)
 @limiter.limit("10/minute")
 @limiter.limit("100/hour")
@@ -114,3 +144,72 @@ def get_species_batch(
 
     return {"found": found, "missing": missing}
 
+@app.post("/taxonomy/batch", response_model=TaxonomyBatchResponse)
+@limiter.limit("10/minute")
+@limiter.limit("100/hour")
+@limiter.limit("1000/day")
+def get_taxonomy_batch(
+    request: Request,
+    payload: TaxonomyBatchRequest,
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Resolve species names and return taxonomic information from GBIF.
+    Handles synonyms and partial matches (genus-level, family-level, etc.).
+    """
+    results = []
+    
+    for name in payload.species:
+        name = name.strip()
+        if not name:
+            continue
+            
+        try:
+            result = gbif_species.name_backbone(name)
+            
+            if 'usageKey' not in result:
+                results.append(TaxonomyResult(
+                    input_name=name,
+                    matched=False
+                ))
+                continue
+            
+            usage = result.get('usage', result) 
+            accepted = result.get('acceptedUsage', {})
+            diagnostics = result.get('diagnostics', {})
+            
+            canonical = usage.get('canonicalName', result.get('canonicalName'))
+            authorship = usage.get('authorship', result.get('authorship'))
+            scientific = usage.get('scientificName', result.get('scientificName', canonical))
+            
+            is_synonym = result.get('synonym', False)
+            
+            results.append(TaxonomyResult(
+                input_name=name,
+                matched=True,
+                canonical_name=canonical,
+                scientific_name=scientific,
+                authorship=authorship,
+                status=usage.get('status', result.get('status')),
+                match_type=diagnostics.get('matchType', result.get('matchType')),
+                confidence=diagnostics.get('confidence', result.get('confidence')),
+                is_synonym=is_synonym,
+                accepted_name=accepted.get('canonicalName') if is_synonym else None,
+                accepted_authorship=accepted.get('authorship') if is_synonym else None,
+                kingdom=result.get('kingdom'),
+                phylum=result.get('phylum'),
+                class_name=result.get('class'),
+                order=result.get('order'),
+                family=result.get('family'),
+                genus=result.get('genus'),
+                species=result.get('species'),
+                rank=usage.get('rank', result.get('rank'))
+            ))
+            
+        except Exception as e:
+            results.append(TaxonomyResult(
+                input_name=name,
+                matched=False
+            ))
+    
+    return {"results": results}
