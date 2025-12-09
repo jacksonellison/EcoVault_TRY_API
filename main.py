@@ -153,10 +153,6 @@ def get_taxonomy_batch(
     payload: TaxonomyBatchRequest,
     api_key: str = Security(verify_api_key)
 ):
-    """
-    Resolve species names and return taxonomic information from GBIF.
-    Handles synonyms and partial matches (genus-level, family-level, etc.).
-    """
     results = []
     
     for name in payload.species:
@@ -213,3 +209,4 @@ def get_taxonomy_batch(
             ))
     
     return {"results": results}
+
