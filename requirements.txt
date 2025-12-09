@@ -3,3 +3,4 @@ uvicorn[standard]==0.27.0
 sqlalchemy==2.0.25
 pydantic==2.5.3
 slowapi==0.1.9
+pygbif==0.6.5
