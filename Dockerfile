@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY main.py .
-COPY VegVault_agg.sqlite .
+COPY database.sqlite .
 
 # Expose port
 EXPOSE 8000
