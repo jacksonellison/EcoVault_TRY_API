@@ -64,7 +64,7 @@ class SpeciesAgg(BaseModel):
     references: List[str] = []
 
 class SpeciesBatchRequest(BaseModel):
-    species: List[str] = Field(..., min_length=1, max_length=50)
+    species: List[str] = Field(..., min_length=1, max_length=100)
 
 class SpeciesBatchResponse(BaseModel):
     found: List[SpeciesAgg]
@@ -92,7 +92,7 @@ class TaxonomyResult(BaseModel):
     rank: str | None = None 
 
 class TaxonomyBatchRequest(BaseModel):
-    species: List[str] = Field(..., min_length=1, max_length=50)
+    species: List[str] = Field(..., min_length=1, max_length=100)
 
 class TaxonomyBatchResponse(BaseModel):
     results: List[TaxonomyResult]
