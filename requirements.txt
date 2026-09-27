@@ -1,9 +1,10 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
 sqlalchemy==2.0.25
-pydantic==2.5.3
+pydantic==2.13.5
 slowapi==0.1.9
-pygbif==0.6.5
+requests==2.34.2
 streamlit==1.64.0
 openpyxl==3.1.5
 pandas==3.0.6
+starlette==1.7.0
