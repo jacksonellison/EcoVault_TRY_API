@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text, bindparam
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from pygbif import species as gbif_species
+import requests as http   # avoid clash with fastapi.Request
 
 # Config
 VALID_API_KEYS = {
@@ -16,6 +16,16 @@ VALID_API_KEYS = {
     "om_f2p4Mfh832OrbSOe1K1BZALiskeQr_6LyteZmuT0"
 }
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
+# GNverifier (Global Names) — one call covers every source below
+GN_URL = "https://verifier.globalnames.org/api/v1/verifications"
+GN_SOURCES = {          # dataSourceId -> short label used in responses
+    1:   "CoL",
+    3:   "ITIS",
+    11:  "GBIF",
+    196: "WFO",
+}
+MAX_ALTERNATIVES = 4    # alternatives returned besides the best match
 
 # Database
 connection_string = "sqlite:///database.sqlite"
@@ -37,7 +47,7 @@ def verify_api_key(key: str = Security(api_key_header)):
 def root():
     return "VegVault API"
 
-# Models
+# ── Models ────────────────────────────────────────────────────────────────────
 class SpeciesAgg(BaseModel):
     species: str
     ssd_avg: float | None = None
@@ -64,32 +74,36 @@ class SpeciesAgg(BaseModel):
     references: List[str] = []
 
 class SpeciesBatchRequest(BaseModel):
-    species: List[str] = Field(..., min_length=1, max_length=100)
+    species: List[str] = Field(..., min_length=1, max_length=50)
 
 class SpeciesBatchResponse(BaseModel):
     found: List[SpeciesAgg]
     missing: List[str]
 
-class TaxonomyResult(BaseModel):
-    input_name: str
-    matched: bool
-    canonical_name: str | None = None
-    scientific_name: str | None = None  
-    authorship: str | None = None
-    status: str | None = None
-    match_type: str | None = None
-    confidence: int | None = None
-    is_synonym: bool = False
-    accepted_name: str | None = None  
-    accepted_authorship: str | None = None
+class Taxon(BaseModel):
+    accepted_name: str | None = None      # current/accepted canonical name (use this downstream)
+    accepted_scientific_name: str | None = None   # accepted name with authorship, e.g. "Festuca rubra L."
+    matched_name: str | None = None       # canonical name the input was matched to
+    scientific_name: str | None = None    # matched name with authorship
+    status: str | None = None             # Accepted | Synonym | N/A
+    is_synonym: bool = False              # matched_name is a synonym of accepted_name
+    match_type: str | None = None         # Exact | Fuzzy | PartialExact | PartialFuzzy
+    confidence: float | None = None       # GNverifier sortScore, higher is better (~0–10)
+    edit_distance: int | None = None      # characters differing from the input
+    sources: List[str] = []               # which of CoL / ITIS / GBIF / WFO gave this answer
     kingdom: str | None = None
     phylum: str | None = None
-    class_name: str | None = None  
+    class_name: str | None = None
     order: str | None = None
     family: str | None = None
     genus: str | None = None
-    species: str | None = None
-    rank: str | None = None 
+
+class TaxonomyResult(BaseModel):
+    input_name: str
+    match_type: str                       # Exact | Fuzzy | PartialExact | PartialFuzzy | NoMatch
+    best: Taxon | None = None             # best-supported interpretation, None if NoMatch
+    alternatives: List[Taxon] = []        # other distinct accepted names (homonyms etc.), best first
+    ambiguous: bool = False               # True if best is not clearly better supported than alternatives
 
 class TaxonomyBatchRequest(BaseModel):
     species: List[str] = Field(..., min_length=1, max_length=100)
@@ -98,7 +112,7 @@ class TaxonomyBatchResponse(BaseModel):
     results: List[TaxonomyResult]
 
 
-
+# ── Trait data ────────────────────────────────────────────────────────────────
 @app.post("/species/batch", response_model=SpeciesBatchResponse)
 @limiter.limit("10/minute")
 @limiter.limit("100/hour")
@@ -130,8 +144,12 @@ def get_species_batch(
         WHERE LOWER(species) IN :species_list
     """).bindparams(bindparam("species_list", expanding=True))
 
+    # Traits are matched at species level: infraspecific input (subsp./var.) is
+    # looked up under its parent binomial.
+    binomial = {s: " ".join(s.split()[:2]).lower() for s in clean}
+
     with engine.begin() as conn:
-        rows = conn.execute(sql, {"species_list": [s.lower() for s in clean]}).mappings().all()
+        rows = conn.execute(sql, {"species_list": list(set(binomial.values()))}).mappings().all()
 
     found = []
     for r in rows:
@@ -141,9 +159,70 @@ def get_species_batch(
         found.append(record)
 
     found_names_lower = {r["species"].lower() for r in found}
-    missing = [s for s in clean if s.lower() not in found_names_lower]
+    missing = [s for s in clean if binomial[s] not in found_names_lower]
 
     return {"found": found, "missing": missing}
+
+
+# ── Taxonomy ──────────────────────────────────────────────────────────────────
+def _parse_gn_result(r: dict) -> Taxon:
+    """Turn one GNverifier result record into a Taxon."""
+    ranks = r.get("classificationRanks", "").split("|")
+    path  = r.get("classificationPath", "").split("|")
+    clf   = dict(zip(ranks, path))
+
+    return Taxon(
+        accepted_name   = r.get("currentCanonicalSimple"),
+        accepted_scientific_name = r.get("currentName"),
+        matched_name    = r.get("matchedCanonicalSimple"),
+        scientific_name = r.get("matchedName"),
+        status          = r.get("taxonomicStatus"),
+        is_synonym      = bool(r.get("isSynonym", False)),
+        match_type      = r.get("matchType"),
+        confidence      = r.get("sortScore"),
+        edit_distance   = r.get("editDistance"),
+        sources         = [GN_SOURCES.get(r.get("dataSourceId"), r.get("dataSourceTitleShort"))],
+        kingdom         = clf.get("kingdom"),
+        phylum          = clf.get("phylum") or clf.get("division"),   # ITIS uses "division"
+        class_name      = clf.get("class"),
+        order           = clf.get("order"),
+        family          = clf.get("family"),
+        genus           = clf.get("genus"),
+    )
+
+
+def _rank_candidates(results: List[dict]) -> List[Taxon]:
+    """
+    One Taxon per distinct accepted name, merging the sources that point to it,
+    ranked by: number of supporting sources, accepted before synonym, GN score.
+    Several entries usually means the input is a homonym (same binomial published
+    by different authors for different taxa), e.g. 'Agrostis tenuis'.
+    """
+    merged: dict[str, Taxon] = {}
+    for r in results:   # GNverifier order: best sortScore first
+        key = (r.get("currentCanonicalSimple") or "").lower()
+        if not key:
+            continue
+        if key in merged:
+            src = _parse_gn_result(r).sources[0]
+            if src not in merged[key].sources:
+                merged[key].sources.append(src)
+        else:
+            merged[key] = _parse_gn_result(r)
+
+    return sorted(
+        merged.values(),
+        key=lambda t: (-len(t.sources), t.is_synonym, -(t.confidence or 0)),
+    )
+
+
+def _is_ambiguous(cands: List[Taxon]) -> bool:
+    """Best must beat the runner-up on source support and not itself be a synonym."""
+    if len(cands) < 2:
+        return False
+    best, second = cands[0], cands[1]
+    return best.is_synonym or len(best.sources) <= len(second.sources)
+
 
 @app.post("/taxonomy/batch", response_model=TaxonomyBatchResponse)
 @limiter.limit("10/minute")
@@ -154,59 +233,33 @@ def get_taxonomy_batch(
     payload: TaxonomyBatchRequest,
     api_key: str = Security(verify_api_key)
 ):
+    names = [n.strip().capitalize() for n in payload.species if n.strip()]
+    if not names:
+        return {"results": []}
+    try:
+        resp = http.post(GN_URL, json={
+            "nameStrings": names,
+            "dataSources": list(GN_SOURCES.keys()),
+            "withAllMatches": True,
+        }, timeout=30)
+        resp.raise_for_status()
+        gn_names = resp.json().get("names", [])
+    except http.RequestException as e:
+        raise HTTPException(502, f"GNverifier request failed: {e}")
     results = []
-    
-    for name in payload.species:
-        name = name.strip()
-        if not name:
+    for name, entry in zip(names, gn_names):
+        candidates = _rank_candidates(entry.get("results", []))
+        # Partial* = only the genus part of the input was recognised; not a usable match
+        if entry.get("matchType") in (None, "NoMatch", "PartialExact", "PartialFuzzy") or not candidates:
+            results.append(TaxonomyResult(input_name=name, match_type="NoMatch"))
             continue
-            
-        try:
-            result = gbif_species.name_backbone(name)
-            
-            if 'usageKey' not in result:
-                results.append(TaxonomyResult(
-                    input_name=name,
-                    matched=False
-                ))
-                continue
-            
-            usage = result.get('usage', result) 
-            accepted = result.get('acceptedUsage', {})
-            diagnostics = result.get('diagnostics', {})
-            
-            canonical = usage.get('canonicalName', result.get('canonicalName'))
-            authorship = usage.get('authorship', result.get('authorship'))
-            scientific = usage.get('scientificName', result.get('scientificName', canonical))
-            
-            is_synonym = result.get('synonym', False)
-            
-            results.append(TaxonomyResult(
-                input_name=name,
-                matched=True,
-                canonical_name=canonical,
-                scientific_name=scientific,
-                authorship=authorship,
-                status=usage.get('status', result.get('status')),
-                match_type=diagnostics.get('matchType', result.get('matchType')),
-                confidence=diagnostics.get('confidence', result.get('confidence')),
-                is_synonym=is_synonym,
-                accepted_name=accepted.get('canonicalName') if is_synonym else None,
-                accepted_authorship=accepted.get('authorship') if is_synonym else None,
-                kingdom=result.get('kingdom'),
-                phylum=result.get('phylum'),
-                class_name=result.get('class'),
-                order=result.get('order'),
-                family=result.get('family'),
-                genus=result.get('genus'),
-                species=result.get('species'),
-                rank=usage.get('rank', result.get('rank'))
-            ))
-            
-        except Exception as e:
-            results.append(TaxonomyResult(
-                input_name=name,
-                matched=False
-            ))
-    
+
+        results.append(TaxonomyResult(
+            input_name   = name,
+            match_type   = entry["matchType"],
+            best         = candidates[0],
+            alternatives = candidates[1:1 + MAX_ALTERNATIVES],
+            ambiguous    = _is_ambiguous(candidates),
+        ))
+
     return {"results": results}
