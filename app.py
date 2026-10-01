@@ -6,7 +6,7 @@ import requests
 import streamlit as st
 
 # ── Config ────────────────────────────────────────────────────────────────────
-API_BASE = os.environ.get("ECOVAULT_API_URL", "http://158.101.172.136:8000/")
+API_BASE = os.environ.get("ECOVAULT_API_URL", "http://158.101.172.136:8000")
 API_KEY  = os.environ.get("ECOVAULT_API_KEY", "A6MmAE31wO_NRSQf9GlvvvxuTtXs4pDH2X54BsgP5ps")
 HEADERS  = {"X-API-Key": API_KEY}
 MAX_SPECIES = 100

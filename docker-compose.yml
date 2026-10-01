@@ -10,10 +10,22 @@ services:
     volumes:
       - ./database.sqlite:/app/database.sqlite:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-
+  web:
+    build: .
+    container_name: vegvault_web
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
+    ports:
+      - "8501:8501"
+    environment:
+      - ECOVAULT_API_URL=http://api:8000
+    env_file:
+      - .env
+    depends_on:
+      - api
+    restart: unless-stopped
