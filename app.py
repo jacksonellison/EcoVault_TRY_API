@@ -175,7 +175,7 @@ with tab_names:
 
         if n_review:
             st.info(
-                f"{n_review} name(s) need a look: a corrected spelling, a synonym, a homonym "
+                f"{n_review} name(s) need review: a corrected spelling, a synonym, a homonym "
                 "(same name published by different authors for different species), or a genus-level name. "
                 "The best-supported candidate is pre-ticked in **Use**; change the tick if you disagree."
             )

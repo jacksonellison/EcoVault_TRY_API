@@ -1,21 +1,12 @@
 import json
-import os
 from typing import List
-from fastapi import FastAPI, Security, Request, HTTPException
-from fastapi.security import APIKeyHeader
+from fastapi import FastAPI, Request, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text, bindparam
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import requests as http   # avoid clash with fastapi.Request
-
-# Config
-VALID_API_KEYS = {
-    "A6MmAE31wO_NRSQf9GlvvvxuTtXs4pDH2X54BsgP5ps",
-    "om_f2p4Mfh832OrbSOe1K1BZALiskeQr_6LyteZmuT0"
-}
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # GNverifier (Global Names) — one call covers every source below
 GN_URL = "https://verifier.globalnames.org/api/v1/verifications"
@@ -24,6 +15,7 @@ GN_SOURCES = {          # dataSourceId -> short label used in responses
     3:   "ITIS",
     11:  "GBIF",
     196: "WFO",
+    197: "POWO"
 }
 MAX_ALTERNATIVES = 4    # alternatives returned besides the best match
 
@@ -32,20 +24,14 @@ connection_string = "sqlite:///database.sqlite"
 engine = create_engine(connection_string, connect_args={"check_same_thread": False})
 
 # App setup
-app = FastAPI(title="VegVault API")
+app = FastAPI(title="EcoHelper API")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Auth check
-def verify_api_key(key: str = Security(api_key_header)):
-    if key not in VALID_API_KEYS:
-        raise HTTPException(403, "Invalid API key")
-    return key
-
 @app.get("/")
 def root():
-    return "VegVault API"
+    return "EcoHelper API"
 
 # ── Models ────────────────────────────────────────────────────────────────────
 class SpeciesAgg(BaseModel):
@@ -74,7 +60,7 @@ class SpeciesAgg(BaseModel):
     references: List[str] = []
 
 class SpeciesBatchRequest(BaseModel):
-    species: List[str] = Field(..., min_length=1, max_length=50)
+    species: List[str] = Field(..., min_length=1, max_length=1000)
 
 class SpeciesBatchResponse(BaseModel):
     found: List[SpeciesAgg]
@@ -120,7 +106,6 @@ class TaxonomyBatchResponse(BaseModel):
 def get_species_batch(
     request: Request,
     payload: SpeciesBatchRequest,
-    api_key: str = Security(verify_api_key)
 ):
     # Normalize input
     seen = set()
@@ -231,7 +216,6 @@ def _is_ambiguous(cands: List[Taxon]) -> bool:
 def get_taxonomy_batch(
     request: Request,
     payload: TaxonomyBatchRequest,
-    api_key: str = Security(verify_api_key)
 ):
     names = [n.strip().capitalize() for n in payload.species if n.strip()]
     if not names:
