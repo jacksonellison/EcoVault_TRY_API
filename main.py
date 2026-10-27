@@ -15,7 +15,7 @@ GN_SOURCES = {          # dataSourceId -> short label used in responses
     3:   "ITIS",
     11:  "GBIF",
     196: "WFO",
-    197: "POWO"
+    197: "WCVP"
 }
 MAX_ALTERNATIVES = 4    # alternatives returned besides the best match
 
@@ -129,12 +129,12 @@ def get_species_batch(
         WHERE LOWER(species) IN :species_list
     """).bindparams(bindparam("species_list", expanding=True))
 
-    # Traits are matched at species level: infraspecific input (subsp./var.) is
-    # looked up under its parent binomial.
-    binomial = {s: " ".join(s.split()[:2]).lower() for s in clean}
+    # The table holds species and infraspecific taxa ("Betula pubescens var. pumila")
+    # as distinct rows, so match the full name as given; collapse internal whitespace.
+    lookup = {s: " ".join(s.split()).lower() for s in clean}
 
     with engine.begin() as conn:
-        rows = conn.execute(sql, {"species_list": list(set(binomial.values()))}).mappings().all()
+        rows = conn.execute(sql, {"species_list": list(set(lookup.values()))}).mappings().all()
 
     found = []
     for r in rows:
@@ -144,7 +144,7 @@ def get_species_batch(
         found.append(record)
 
     found_names_lower = {r["species"].lower() for r in found}
-    missing = [s for s in clean if binomial[s] not in found_names_lower]
+    missing = [s for s in clean if lookup[s] not in found_names_lower]
 
     return {"found": found, "missing": missing}
 
@@ -156,10 +156,11 @@ def _parse_gn_result(r: dict) -> Taxon:
     path  = r.get("classificationPath", "").split("|")
     clf   = dict(zip(ranks, path))
 
+    # *CanonicalFull keeps infraspecific rank markers (subsp., var.); *CanonicalSimple drops them.
     return Taxon(
-        accepted_name   = r.get("currentCanonicalSimple"),
+        accepted_name   = r.get("currentCanonicalFull") or r.get("currentCanonicalSimple"),
         accepted_scientific_name = r.get("currentName"),
-        matched_name    = r.get("matchedCanonicalSimple"),
+        matched_name    = r.get("matchedCanonicalFull") or r.get("matchedCanonicalSimple"),
         scientific_name = r.get("matchedName"),
         status          = r.get("taxonomicStatus"),
         is_synonym      = bool(r.get("isSynonym", False)),
@@ -185,7 +186,7 @@ def _rank_candidates(results: List[dict]) -> List[Taxon]:
     """
     merged: dict[str, Taxon] = {}
     for r in results:   # GNverifier order: best sortScore first
-        key = (r.get("currentCanonicalSimple") or "").lower()
+        key = (r.get("currentCanonicalFull") or r.get("currentCanonicalSimple") or "").lower()
         if not key:
             continue
         if key in merged:

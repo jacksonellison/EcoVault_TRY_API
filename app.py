@@ -59,7 +59,7 @@ def validate_names(names: list[str]) -> bool:
     return True
 
 
-SOURCE_ORDER = ["CoL", "ITIS", "GBIF", "WFO"]
+SOURCE_ORDER = ["CoL", "ITIS", "GBIF", "WFO", "WCVP"]
 
 
 def taxonomy_to_frame(results: list[dict]) -> pd.DataFrame:
@@ -96,7 +96,7 @@ def taxonomy_to_frame(results: list[dict]) -> pd.DataFrame:
         if r["match_type"] == "NoMatch" or not r.get("best"):
             rows.append(row(r["input_name"], "No match", {}, False))
             continue
-        spelling = "Correct" if r["match_type"] == "Exact" else "Fuzzy"
+        spelling = "Exact" if r["match_type"] == "Exact" else "Fuzzy"
         rows.append(row(r["input_name"], spelling, r["best"], True))
         for alt in r.get("alternatives", []):
             rows.append(row(r["input_name"], spelling, alt, False))
@@ -109,7 +109,7 @@ def input_status(group: pd.DataFrame) -> str:
     if (group["Spelling"] == "No match").all():
         return "No match"
     if (len(group) == 1
-            and group["Spelling"].iloc[0] == "Correct"
+            and group["Spelling"].iloc[0] == "Exact"
             and group["Synonym"].iloc[0] == ""
             and group["Scientific Name"].iloc[0] != ""):
         return "Exact"
@@ -126,13 +126,13 @@ def excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
 
 
 # ── Page setup ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="EcoHelper — Plant Data", layout="wide")
-st.title("🌿 EcoHelper — Plant Data")
+st.set_page_config(page_title="EcoHelper", layout="wide")
+st.title("🌿 EcoHelper")
 
 st.session_state.setdefault("taxonomy_df", None)
 st.session_state.setdefault("trait_input", "")
 
-tab_names, tab_traits = st.tabs(["1 · Check names", "2 · Traits"])
+tab_names, tab_traits, tab_about = st.tabs(["1 · Check names", "2 · Traits", "3 · About"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -147,7 +147,7 @@ with tab_names:
 
     tax_raw = st.text_area(
         "Species names (comma- or newline-separated)",
-        placeholder="festuca rubra, Carex nigra, Agrostis tenuis",
+        placeholder="Festuca rubra, Carex nigra, Agrostis tenuis",
         height=100,
         key="tax_raw",
     )
@@ -189,7 +189,7 @@ with tab_names:
             column_config={
                 "Use":             st.column_config.CheckboxColumn(help="Tick the candidate to send to the Traits tab"),
                 "Scientific Name": st.column_config.TextColumn(help="Accepted name with author; blank for genus-level results"),
-                "Spelling":        st.column_config.TextColumn(help="Correct = your input exists verbatim; Fuzzy = a typo was corrected"),
+                "Spelling":        st.column_config.TextColumn(help="Exact = your input exists verbatim; Fuzzy = a typo was corrected"),
                 "Synonym":         st.column_config.TextColumn(help="The name you typed, when it is a synonym of the accepted name"),
             },
             key="tax_editor",
@@ -256,9 +256,12 @@ with tab_traits:
                     if tax is not None:
                         tax_cols = (tax[tax["Use"].fillna(False).astype(bool)]
                                     [["Accepted name"] + TAXONOMY_COLUMNS]
-                                    .drop_duplicates("Accepted name"))
-                        traits = traits.merge(tax_cols, left_on="Species", right_on="Accepted name", how="left") \
-                                       .drop(columns="Accepted name")
+                                    .assign(_key=lambda d: d["Accepted name"].fillna("").str.lower())
+                                    .drop(columns="Accepted name")
+                                    .drop_duplicates("_key"))
+                        traits = (traits.assign(_key=traits["Species"].str.lower())
+                                        .merge(tax_cols, on="_key", how="left")
+                                        .drop(columns="_key"))
                         traits = traits[["Species"] + TAXONOMY_COLUMNS +
                                         [c for c in traits.columns if c not in ["Species"] + TAXONOMY_COLUMNS]]
 
@@ -282,3 +285,27 @@ with tab_traits:
                         mime=XLSX_MIME,
                         key="dl_traits",
                     )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tab 3 — About
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_about:
+    st.markdown("""
+## About EcoHelper
+
+EcoHelper checks plant species names and retrieves functional traits for them.
+
+**Check names** validates each name with [GNverifier](https://verifier.globalnames.org/)
+against Catalogue of Life, ITIS, GBIF, World Flora Online and the World Checklist of
+Vascular Plants (POWO), corrects spelling, resolves synonyms and returns the accepted
+name with authorship and classification.
+
+**Traits** returns per-species means, standard deviations and sample sizes for seven
+traits from the [TRY Plant Trait Database](https://www.try-db.org/): SSD, leaf nitrogen,
+seed mass, LDMC, height, leaf area and SLA. Please cite TRY (Kattge et al. 2020,
+*Global Change Biology*, https://doi.org/10.1111/gcb.14904) when using these values.
+
+The same functions are available as a [REST API](http://158.101.172.136:8000/docs) for
+use from R or Python. Source code and issue tracker:
+[github.com/jacksonellison/EcoHelper](https://github.com/jacksonellison/EcoHelper).
+    """)
