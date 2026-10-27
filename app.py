@@ -256,12 +256,9 @@ with tab_traits:
                     if tax is not None:
                         tax_cols = (tax[tax["Use"].fillna(False).astype(bool)]
                                     [["Accepted name"] + TAXONOMY_COLUMNS]
-                                    .assign(_key=lambda d: d["Accepted name"].fillna("").str.lower())
-                                    .drop(columns="Accepted name")
-                                    .drop_duplicates("_key"))
-                        traits = (traits.assign(_key=traits["Species"].str.lower())
-                                        .merge(tax_cols, on="_key", how="left")
-                                        .drop(columns="_key"))
+                                    .drop_duplicates("Accepted name"))
+                        traits = traits.merge(tax_cols, left_on="Species", right_on="Accepted name", how="left") \
+                                       .drop(columns="Accepted name")
                         traits = traits[["Species"] + TAXONOMY_COLUMNS +
                                         [c for c in traits.columns if c not in ["Species"] + TAXONOMY_COLUMNS]]
 
