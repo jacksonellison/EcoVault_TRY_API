@@ -293,16 +293,17 @@ with tab_about:
 EcoHelper checks plant species names and retrieves functional traits for them.
 
 **Check names** validates each name with [GNverifier](https://verifier.globalnames.org/)
-against Catalogue of Life, ITIS, GBIF, World Flora Online and the World Checklist of
-Vascular Plants (POWO), corrects spelling, resolves synonyms and returns the accepted
+against Catalogue of Life, ITIS, GBIF, and World Flora Online, corrects spelling, resolves synonyms and returns the accepted
 name with authorship and classification.
 
 **Traits** returns per-species means, standard deviations and sample sizes for seven
 traits from the [TRY Plant Trait Database](https://www.try-db.org/): SSD, leaf nitrogen,
 seed mass, LDMC, height, leaf area and SLA. Please cite TRY (Kattge et al. 2020,
 *Global Change Biology*, https://doi.org/10.1111/gcb.14904) when using these values.
+Comprehensive references for each species are provided in the References tab of the sheet
+available for download in the Traits tab.
 
 The same functions are available as a [REST API](http://158.101.172.136:8000/docs) for
 use from R or Python. Source code and issue tracker:
-[github.com/jacksonellison/EcoHelper](https://github.com/jacksonellison/EcoHelper).
+[GitHub](https://github.com/jacksonellison/EcoHelper).
     """)
